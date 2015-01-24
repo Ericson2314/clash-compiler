@@ -10,7 +10,7 @@ import           Data.HashMap.Strict          (HashMap)
 import qualified Data.HashMap.Strict          as HashMap
 import qualified Data.HashSet                 as HashSet
 import           Data.List                    (isSuffixOf)
-import           Data.Maybe                   (listToMaybe)
+-- import           Data.Maybe                   (listToMaybe)
 import qualified Data.Text.Lazy               as Text
 import qualified System.Directory             as Directory
 import qualified System.FilePath              as FilePath
@@ -22,7 +22,7 @@ import           CLaSH.Backend
 import           CLaSH.Core.Term              (Term)
 import           CLaSH.Core.Type              (Type)
 import           CLaSH.Core.TyCon             (TyCon, TyConName)
-import           CLaSH.Driver.TestbenchGen
+--import           CLaSH.Driver.TestbenchGen
 import           CLaSH.Driver.Types
 import           CLaSH.Netlist                (genNetlist)
 import           CLaSH.Netlist.Types          (Component (..), HWType)
@@ -37,7 +37,7 @@ import qualified Data.Time.Clock              as Clock
 -- | Create a set of .VHDL files for a set of functions
 generateVHDL :: Backend backend
              => BindingMap -- ^ Set of functions
-             -> Maybe backend
+             -> backend
              -> PrimMap -- ^ Primitive / BlackBox Definitions
              -> HashMap TyConName TyCon -- ^ TyCon cache
              -> (HashMap TyConName TyCon -> Type -> Maybe (Either String HWType)) -- ^ Hardcoded 'Type' -> 'HWType' translator
@@ -46,6 +46,8 @@ generateVHDL :: Backend backend
              -> IO ()
 generateVHDL bindingsMap vhdlState primMap tcm typeTrans eval dbgLevel = do
   start <- Clock.getCurrentTime
+
+  -- Dependency loading
   prepTime <- start `deepseq` bindingsMap `deepseq` tcm `deepseq` Clock.getCurrentTime
   let prepStartDiff = Clock.diffUTCTime prepTime start
   putStrLn $ "Loading dependencies took " ++ show prepStartDiff
@@ -62,62 +64,62 @@ generateVHDL bindingsMap vhdlState primMap tcm typeTrans eval dbgLevel = do
                           (\var _ -> isSuffixOf ".expectedOutput" $ name2String var)
                           bindingsMap
 
-  case HashMap.toList topEntities of
-    [topEntity] -> do
-      -- Create unique supplies for normalisation and TB generation
-      (supplyN,supplyTB) <- Supply.splitSupply
-                          . snd
-                          . Supply.freshId
-                         <$> Supply.newSupply
+  let topEntity = case HashMap.toList topEntities of
+        [topE] -> topE
+        []     -> error $ $(curLoc) ++ "No 'topEntity' found"
+        _      -> error $ $(curLoc) ++ "Multiple 'topEntity's found"
 
-      let doNorm     = do norm <- normalize [fst topEntity]
-                          let normChecked = checkNonRecursive (fst topEntity) norm
-                          cleanupGraph (fst topEntity) normChecked
-          transformedBindings = runNormalization dbgLevel supplyN bindingsMap typeTrans tcm eval doNorm
+  -- Create unique supplies for normalisation and TB generation
+  (supplyN,supplyTB) <- Supply.splitSupply
+                      . snd
+                      . Supply.freshId
+                     <$> Supply.newSupply
 
-      normTime <- transformedBindings `deepseq` Clock.getCurrentTime
-      let prepNormDiff = Clock.diffUTCTime normTime prepTime
-      putStrLn $ "Normalisation took " ++ show prepNormDiff
+  let doNorm = do norm <- normalize [fst topEntity]
+                  let normChecked = checkNonRecursive (fst topEntity) norm
+                  cleanupGraph (fst topEntity) normChecked
+      transformedBindings = runNormalization dbgLevel supplyN bindingsMap typeTrans tcm eval doNorm
 
-      (netlist,vhdlState',cmpCnt) <- genNetlist vhdlState Nothing
-                               transformedBindings
-                               primMap tcm typeTrans Nothing (fst topEntity)
+  -- Normalization
+  normTime <- transformedBindings `deepseq` Clock.getCurrentTime
+  let prepNormDiff = Clock.diffUTCTime normTime prepTime
+  putStrLn $ "Normalisation took " ++ show prepNormDiff
 
-      netlistTime <- netlist `deepseq` Clock.getCurrentTime
-      let normNetDiff = Clock.diffUTCTime netlistTime normTime
-      putStrLn $ "Netlist generation took " ++ show normNetDiff
+  (netlist, cmpCnt) <- genNetlist Nothing transformedBindings primMap tcm
+                       typeTrans Nothing (fst topEntity)
 
-      let topComponent = head
-                       $ filter (\(Component cName _ _ _ _) ->
-                                    Text.isSuffixOf (Text.pack "topEntity_0")
-                                      cName)
-                                netlist
+  netlistTime <- netlist `deepseq` Clock.getCurrentTime
+  let normNetDiff = Clock.diffUTCTime netlistTime normTime
+  putStrLn $ "Netlist generation took " ++ show normNetDiff
 
-      (testBench,vhdlState'') <- genTestBench dbgLevel supplyTB primMap
-                                 typeTrans tcm eval vhdlState' cmpCnt bindingsMap
-                                 (listToMaybe $ map fst $ HashMap.toList testInputs)
-                                 (listToMaybe $ map fst $ HashMap.toList expectedOutputs)
-                                 topComponent
+  let topComponent = head
+                   $ filter (\(Component cName _ _ _ _) ->
+                                Text.isSuffixOf (Text.pack "topEntity_0")
+                                  cName)
+                            netlist
+
+  --(testBench,vhdlState'') <- genTestBench dbgLevel supplyTB primMap
+  --                           typeTrans tcm eval vhdlState' cmpCnt bindingsMap
+  --                           (listToMaybe $ map fst $ HashMap.toList testInputs)
+  --                           (listToMaybe $ map fst $ HashMap.toList expectedOutputs)
+  --                           topComponent
 
 
-      testBenchTime <- testBench `seq` Clock.getCurrentTime
-      let netTBDiff = Clock.diffUTCTime testBenchTime netlistTime
-      putStrLn $ "Testbench generation took " ++ show netTBDiff
+  --testBenchTime <- testBench `seq` Clock.getCurrentTime
+  --let netTBDiff = Clock.diffUTCTime testBenchTime netlistTime
+  --putStrLn $ "Testbench generation took " ++ show netTBDiff
 
-      let vhdlDocs = createVHDL vhdlState'' (netlist ++ testBench)
-          dir = concat [ "./vhdl/"
-                       , takeWhile (/= '.') (name2String $ fst topEntity)
-                       , "/"
-                       ]
-      prepareDir dir
-      mapM_ (writeVHDL dir) vhdlDocs
+  let vhdlDocs = createVHDL vhdlState netlist --(netlist ++ testBench)
+      dir = concat [ "./vhdl/"
+                   , takeWhile (/= '.') (name2String $ fst topEntity)
+                   , "/"
+                   ]
+  prepareDir dir
+  mapM_ (writePretty dir) vhdlDocs
 
-      end <- vhdlDocs `seq` Clock.getCurrentTime
-      let startEndDiff = Clock.diffUTCTime end start
-      putStrLn $ "Total compilation took " ++ show startEndDiff
-
-    [] -> error $ $(curLoc) ++ "No 'topEntity' found"
-    _  -> error $ $(curLoc) ++ "Multiple 'topEntity's found"
+  end <- vhdlDocs `seq` Clock.getCurrentTime
+  let startEndDiff = Clock.diffUTCTime end start
+  putStrLn $ "Total compilation took " ++ show startEndDiff
 
 -- | Pretty print Components to VHDL Documents
 createVHDL :: Backend backend
@@ -145,9 +147,9 @@ prepareDir dir = do
   -- Remove the files
   mapM_ Directory.removeFile abs_to_remove
 
--- | Writes a VHDL file to the given directory
-writeVHDL :: FilePath -> (String, Doc) -> IO ()
-writeVHDL dir (cname, vhdl) = do
+-- | Writes a Pretty Doc file to the given directory
+writePretty :: FilePath -> (String, Doc) -> IO ()
+writePretty dir (cname, vhdl) = do
   handle <- IO.openFile (dir ++ cname ++ ".vhdl") IO.WriteMode
   IO.hPutStrLn handle "-- Automatically generated VHDL"
   hPutDoc handle vhdl

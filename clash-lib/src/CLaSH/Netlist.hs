@@ -19,7 +19,6 @@ import           Unbound.LocallyNameless    (Embed (..), name2String,
                                              runFreshMT, unbind, unembed,
                                              unrebind)
 
-import           CLaSH.Backend              as Back
 import           CLaSH.Core.DataCon         (DataCon (..))
 import           CLaSH.Core.Literal         (Literal (..))
 import           CLaSH.Core.Pretty          (showDoc)
@@ -29,7 +28,7 @@ import           CLaSH.Core.Type            (Type (..))
 import           CLaSH.Core.TyCon           (TyConName, TyCon)
 import           CLaSH.Core.Util            (collectArgs, isVar, termType)
 import           CLaSH.Core.Var             (Id, Var (..))
-import           CLaSH.Netlist.BlackBox
+--import           CLaSH.Netlist.BlackBox
 import           CLaSH.Netlist.Id
 import           CLaSH.Netlist.Types        as HW
 import           CLaSH.Netlist.Util
@@ -39,10 +38,7 @@ import           CLaSH.Util
 
 -- | Generate a hierarchical netlist out of a set of global binders with
 -- @topEntity@ at the top.
-genNetlist :: Backend backend
-           => Maybe backend
-           -- ^ State for the 'CLaSH.Netlist.VHDL.VHDLM' Monad
-           -> Maybe Int
+genNetlist :: Maybe Int
            -- ^ Starting number of the component counter
            -> HashMap TmName (Type,Term)
            -- ^ Global binders
@@ -56,16 +52,13 @@ genNetlist :: Backend backend
            -- ^ Symbol count
            -> TmName
            -- ^ Name of the @topEntity@
-           -> IO ([Component],backend,Int)
-genNetlist vhdlStateM compCntM globals primMap tcm typeTrans mStart topEntity = do
-  (_,s) <- runNetlistMonad vhdlStateM compCntM globals primMap tcm typeTrans $ genComponent topEntity mStart
-  return (HashMap.elems $ _components s, _vhdlMState s, _cmpCount s)
+           -> IO ([Component],Int)
+genNetlist compCntM globals primMap tcm typeTrans mStart topEntity = do
+  (_,s) <- runNetlistMonad compCntM globals primMap tcm typeTrans $ genComponent topEntity mStart
+  return (HashMap.elems $ _components s, _cmpCount s)
 
 -- | Run a NetlistMonad action in a given environment
-runNetlistMonad :: Backend backend
-                => Maybe backend
-                -- ^ State for the 'CLaSH.Netlist.VHDL.VHDLM' Monad
-                -> Maybe Int
+runNetlistMonad :: Maybe Int
                 -- ^ Starting number of the component counter
                 -> HashMap TmName (Type,Term)
                 -- ^ Global binders
@@ -75,22 +68,21 @@ runNetlistMonad :: Backend backend
                 -- ^ TyCon cache
                 -> (HashMap TyConName TyCon -> Type -> Maybe (Either String HWType))
                 -- ^ Hardcode Type -> HWType translator
-                -> NetlistMonad backend a
+                -> NetlistMonad a
                 -- ^ Action to run
-                -> IO (a, NetlistState backend)
-runNetlistMonad vhdlStateM compCntM s p tcm typeTrans
+                -> IO (a, NetlistState)
+runNetlistMonad compCntM s p tcm typeTrans
   = runFreshMT
   . flip runStateT s'
   . (fmap fst . runWriterT)
   . runNetlist
   where
-    s' = NetlistState s HashMap.empty 0 (fromMaybe 0 compCntM) HashMap.empty p (fromMaybe Back.init vhdlStateM) typeTrans tcm
+    s' = NetlistState s HashMap.empty 0 (fromMaybe 0 compCntM) HashMap.empty p typeTrans tcm
 
 -- | Generate a component for a given function (caching)
-genComponent :: Backend backend
-             => TmName -- ^ Name of the function
+genComponent :: TmName -- ^ Name of the function
              -> Maybe Int -- ^ Starting value of the unique counter
-             -> NetlistMonad backend Component
+             -> NetlistMonad Component
 genComponent compName mStart = do
   compExprM <- fmap (HashMap.lookup compName) $ Lens.use bindings
   case compExprM of
@@ -99,11 +91,10 @@ genComponent compName mStart = do
                       genComponentT compName expr_ mStart
 
 -- | Generate a component for a given function
-genComponentT :: Backend backend
-              => TmName -- ^ Name of the function
+genComponentT :: TmName -- ^ Name of the function
               -> Term -- ^ Corresponding term
               -> Maybe Int -- ^ Starting value of the unique counter
-              -> NetlistMonad backend Component
+              -> NetlistMonad Component
 genComponentT compName componentExpr mStart = do
   varCount .= fromMaybe 0 mStart
   componentNumber <- cmpCount <<%= (+1)
@@ -152,11 +143,9 @@ genComponentT compName componentExpr mStart = do
   return component
 
 -- | Generate a list of Declarations for a let-binder
-mkDeclarations :: forall backend
-               .  Backend backend
-               => Id -- ^ LHS of the let-binder
+mkDeclarations :: Id -- ^ LHS of the let-binder
                -> Term -- ^ RHS of the let-binder
-               -> NetlistMonad backend [Declaration]
+               -> NetlistMonad [Declaration]
 mkDeclarations bndr (Var _ v) = mkFunApp bndr v []
 
 mkDeclarations _ e@(Case _ _ []) =
@@ -203,7 +192,7 @@ mkDeclarations bndr (Case scrut altTy alts) = do
   let dstId = mkBasicId . Text.pack . name2String $ varName bndr
   return $! scrutDecls ++ altsDecls ++ [CondAssignment dstId scrutExpr (reverse exprs)]
   where
-    mkCondExpr :: HWType -> (Pat,Term) -> NetlistMonad backend ((Maybe Expr,Expr),[Declaration])
+    mkCondExpr :: HWType -> (Pat,Term) -> NetlistMonad ((Maybe Expr,Expr),[Declaration])
     mkCondExpr scrutHTy (pat,alt) = do
       (altExpr,altDecls) <- mkExpr False altTy alt
       (,altDecls) <$> case pat of
@@ -233,11 +222,10 @@ mkDeclarations bndr app =
       return (declsApp ++ [Assignment dstId exprApp])
 
 -- | Generate a list of Declarations for a let-binder where the RHS is a function application
-mkFunApp :: Backend backend
-         => Id -- ^ LHS of the let-binder
+mkFunApp :: Id -- ^ LHS of the let-binder
          -> TmName -- ^ Name of the applied function
          -> [Term] -- ^ Function arguments
-         -> NetlistMonad backend [Declaration]
+         -> NetlistMonad [Declaration]
 mkFunApp dst fun args = do
   normalized <- Lens.use bindings
   case HashMap.lookup fun normalized of
@@ -262,18 +250,17 @@ mkFunApp dst fun args = do
       _ -> error $ $(curLoc) ++ "Unknown function: " ++ showDoc fun
 
 -- | Generate an expression for a term occurring on the RHS of a let-binder
-mkExpr :: Backend backend
-       => Bool -- ^ Treat BlackBox expression as declaration
+mkExpr :: Bool -- ^ Treat BlackBox expression as declaration
        -> Type -- ^ Type of the LHS of the let-binder
        -> Term -- ^ Term to convert to an expression
-       -> NetlistMonad backend (Expr,[Declaration]) -- ^ Returned expression and a list of generate BlackBox declarations
+       -> NetlistMonad (Expr,[Declaration]) -- ^ Returned expression and a list of generate BlackBox declarations
 mkExpr _ _ (Core.Literal lit) = return (HW.Literal Nothing . NumLit $ fromInteger  $! i,[])
   where
     i = case lit of
           (IntegerLiteral i') -> i'
           _ -> error $ $(curLoc) ++ "not an integer literal"
 
-mkExpr bbEasD ty app = do
+mkExpr _bbEasD ty app = do
   let (appF,args) = collectArgs app
       tmArgs      = lefts args
   hwTy    <- unsafeCoreTypeToHWTypeM $(curLoc) ty
@@ -281,18 +268,17 @@ mkExpr bbEasD ty app = do
     Data dc
       | all (\e -> isConstant e || isVar e) tmArgs -> mkDcApplication hwTy dc tmArgs
       | otherwise                                  -> error $ $(curLoc) ++ "Not in normal form: DataCon-application with non-Simple arguments"
-    Prim nm _ -> first fst <$> mkPrimitive False bbEasD nm args ty
+    Prim _nm _ -> error $ $(curLoc) ++ "temporarily not supporting BlackBlox" --first fst <$> mkPrimitive False bbEasD nm args ty
     Var _ f
       | null tmArgs -> return (Identifier (mkBasicId . Text.pack $ name2String f) Nothing,[])
       | otherwise -> error $ $(curLoc) ++ "Not in normal form: top-level binder in argument position: " ++ showDoc app
     _ -> error $ $(curLoc) ++ "Not in normal form: application of a Let/Lam/Case: " ++ showDoc app
 
 -- | Generate an expression for a DataCon application occurring on the RHS of a let-binder
-mkDcApplication :: Backend backend
-                => HWType -- ^ HWType of the LHS of the let-binder
+mkDcApplication :: HWType -- ^ HWType of the LHS of the let-binder
                 -> DataCon -- ^ Applied DataCon
                 -> [Term] -- ^ DataCon Arguments
-                -> NetlistMonad backend (Expr,[Declaration]) -- ^ Returned expression and a list of generate BlackBox declarations
+                -> NetlistMonad (Expr,[Declaration]) -- ^ Returned expression and a list of generate BlackBox declarations
 mkDcApplication dstHType dc args = do
   tcm                 <- Lens.use tcCache
   argTys              <- mapM (termType tcm) args

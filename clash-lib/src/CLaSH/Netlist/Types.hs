@@ -25,19 +25,17 @@ import CLaSH.Util
 
 -- | Monad that caches generated components (StateT) and remembers hidden inputs
 -- of components that are being generated (WriterT)
-newtype NetlistMonad backend a =
+newtype NetlistMonad a =
   NetlistMonad { runNetlist :: WriterT
                                [(Identifier,HWType)]
-                               (StateT (NetlistState backend) (FreshMT IO))
+                               (StateT NetlistState (FreshMT IO))
                                a
                }
-  deriving (Functor, Monad, Applicative, MonadWriter [(Identifier,HWType)],
-            Fresh, MonadIO)
-
-deriving instance MonadState (NetlistState backend) (NetlistMonad backend)
+  deriving (Functor, Monad, Applicative, MonadState NetlistState,
+            MonadWriter [(Identifier,HWType)], Fresh, MonadIO)
 
 -- | State of the NetlistMonad
-data NetlistState backend
+data NetlistState
   = NetlistState
   { _bindings       :: HashMap TmName (Type,Term) -- ^ Global binders
   , _varEnv         :: Gamma -- ^ Type environment/context
@@ -45,7 +43,6 @@ data NetlistState backend
   , _cmpCount       :: Int -- ^ Number of create components
   , _components     :: HashMap TmName Component -- ^ Cached components
   , _primitives     :: PrimMap -- ^ Primitive Definitions
-  , _vhdlMState     :: backend -- ^ State for the 'CLaSH.Netlist.VHDL.VHDLM' Monad
   , _typeTranslator :: HashMap TyConName TyCon -> Type -> Maybe (Either String HWType) -- ^ Hardcoded Type -> HWType translator
   , _tcCache        :: HashMap TyConName TyCon -- ^ TyCon cache
   }

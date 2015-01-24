@@ -95,14 +95,14 @@ Library
                       CLaSH.Core.Var
 
                       CLaSH.Driver
-                      CLaSH.Driver.TestbenchGen
+                      --CLaSH.Driver.TestbenchGen
                       CLaSH.Driver.Types
 
                       CLaSH.Netlist
-                      CLaSH.Netlist.BlackBox
-                      CLaSH.Netlist.BlackBox.Parser
-                      CLaSH.Netlist.BlackBox.Types
-                      CLaSH.Netlist.BlackBox.Util
+                      --CLaSH.Netlist.BlackBox
+                      --CLaSH.Netlist.BlackBox.Parser
+                      --CLaSH.Netlist.BlackBox.Types
+                      --CLaSH.Netlist.BlackBox.Util
                       CLaSH.Netlist.Id
                       CLaSH.Netlist.Types
                       CLaSH.Netlist.Util
