@@ -71,21 +71,14 @@ instance NFData (Declaration blackbox) where
 
 
 -- | CoreExpression used in RHS of a declaration
-data NonIndex recur
+data CoreExpr recur
   = Literal    SizedLiteral -- ^ Literal expression
   | Concat     [recur]      -- ^ New!
   | Identifier N.Identifier -- ^ Signal reference
+  | Index      Int Int recur
   | DataTag    Bool recur -- ^ @False e@: tagToEnum#, @True e@: dataToTag#
   | DataCon    [recur] -- ^ DataCon application
   deriving (Show, Functor, Foldable, Traversable)
-
--- | Core Expression type that doesn't permit indexing "twice in a row"
-data CoreExpr index noIndex
-  = E index
-  | Index Int Int noIndex
-  deriving (Show, Functor, Foldable, Traversable)
-
-type CoreExprHelper (splice :: * -> *) recur = splice :$ CoreExpr (NonIndex :$ recur) (splice :$ NonIndex :$ recur)
 
 -- | Add optional typing to every node
 data MaybeTyped recur
@@ -99,12 +92,8 @@ type (:.) (f :: b -> *) (g :: a -> b) (x :: a) = (f (g x))
 
 data Mu (t :: * -> *) = Mu (t :$ Mu t)
 
-type BigRecur blackbox = NonIndex :$ Expr blackbox
-type Splice blackbox x = MaybeTyped :$ Either blackbox x
-
+-- Wish I could use Mu here... :(
 data Expr blackbox =
-  MTBBE (Splice blackbox
-                (CoreExpr (BigRecur blackbox)
-                      (Splice blackbox (BigRecur blackbox))))
+  MTBBE (MaybeTyped :$ Either blackbox :$ CoreExpr :$ Expr blackbox)
   deriving Show
   --deriving (Show, Functor, Foldable, Traversable)
